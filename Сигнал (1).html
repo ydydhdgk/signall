@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Сигнал</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1a1a1a;
+    --muted: #6b6b6b;
+    --orange: #ff7a00;
+    --orange-dark: #e56a00;
+    --flash: #ff7a00;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #ffffff;
+      --text: #1a1a1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 24px;
+    text-align: center;
+    transition: background-color 0.08s linear;
+  }
+  body.flashing {
+    animation: strobe 0.35s steps(1) 6;
+  }
+  @keyframes strobe {
+    0%, 100% { background-color: var(--bg); }
+    50% { background-color: var(--flash); }
+  }
+  h1 {
+    font-size: clamp(28px, 6vw, 44px);
+    letter-spacing: 0.04em;
+    margin: 0;
+  }
+  p.status {
+    color: var(--muted);
+    font-size: 15px;
+    min-height: 20px;
+    margin: 0;
+  }
+  button#signalBtn {
+    font-size: clamp(20px, 5vw, 28px);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #fff;
+    background: var(--orange);
+    border: none;
+    border-radius: 999px;
+    padding: 28px 56px;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(255, 122, 0, 0.35);
+    transition: transform 0.08s ease, box-shadow 0.08s ease, background-color 0.08s ease;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  button#signalBtn:hover { background: var(--orange-dark); }
+  button#signalBtn:active {
+    transform: scale(0.96);
+    box-shadow: 0 4px 12px rgba(255, 122, 0, 0.35);
+  }
+  button#signalBtn:disabled {
+    opacity: 0.6;
+    cursor: default;
+    transform: none;
+  }
+  .count {
+    font-size: 13px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <h1>СИГНАЛ</h1>
+  <button id="signalBtn">СИГНАЛ</button>
+  <p class="status" id="status">Нажмите кнопку — экран мигнёт у всех, кто сейчас на сайте</p>
+  <p class="count" id="peerCount"></p>
+
+<script>
+(function () {
+  const btn = document.getElementById('signalBtn');
+  const statusEl = document.getElementById('status');
+  const peerCountEl = document.getElementById('peerCount');
+  let room = null;
+
+  // Beep via Web Audio API — no external assets needed
+  function playBeep() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      // three short beeps
+      for (let i = 0; i < 3; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = 880;
+        const start = now + i * 0.28;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
+        gain.gain.linearRampToValueAtTime(0, start + 0.22);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.25);
+      }
+      setTimeout(() => ctx.close().catch(() => {}), 1200);
+    } catch (e) {
+      // audio not available, ignore
+    }
+  }
+
+  function flashScreen() {
+    document.body.classList.remove('flashing');
+    // restart animation
+    void document.body.offsetWidth;
+    document.body.classList.add('flashing');
+    setTimeout(() => document.body.classList.remove('flashing'), 2200);
+  }
+
+  function triggerSignal() {
+    flashScreen();
+    playBeep();
+  }
+
+  async function init() {
+    try {
+      room = await claude.use('room');
+    } catch (e) {
+      room = null;
+    }
+
+    if (!room) {
+      statusEl.textContent = 'Не удалось подключиться к общей комнате — сигнал сработает только у вас';
+    } else {
+      room.on('signal', () => {
+        triggerSignal();
+        statusEl.textContent = 'Сигнал получен!';
+        setTimeout(() => {
+          statusEl.textContent = 'Нажмите кнопку — экран мигнёт у всех, кто сейчас на сайте';
+        }, 2000);
+      });
+
+      if (room.onPeers) {
+        room.onPeers((peers) => {
+          const n = Array.isArray(peers) ? peers.length : 0;
+          peerCountEl.textContent = n > 0 ? `Сейчас на сайте: ${n + 1}` : '';
+        });
+      }
+    }
+
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      statusEl.textContent = 'Сигнал отправлен...';
+      triggerSignal();
+      if (room) {
+        try {
+          room.emit('signal', { ts: Date.now() });
+        } catch (e) {
+          // ignore
+        }
+      }
+      setTimeout(() => {
+        btn.disabled = false;
+        statusEl.textContent = 'Нажмите кнопку — экран мигнёт у всех, кто сейчас на сайте';
+      }, 1500);
+    });
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
